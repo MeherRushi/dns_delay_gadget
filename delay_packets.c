@@ -8,7 +8,7 @@
 #include <linux/pkt_cls.h>
 #include <linux/time.h>
 
-#define DELAY_NS 500000000  // Delay of 500 milliseconds (500ms = 500,000,000 nanoseconds)
+#define DELAY_NS 500000000  // Delay of 500 milliseconds
 #define MAX_PACKET_SIZE 512 // DNS packets usually fit within 512 bytes
 
 struct packet_data {
@@ -115,25 +115,20 @@ int delay_packets(struct __sk_buff *skb)
         __u32 key = 0;
         struct packet_data *pkt_data = bpf_map_lookup_elem(&pkt_data_array, &key);
         if (!pkt_data) {
-            struct packet_data new_pkt_data = {0};
-            new_pkt_data.ifindex = skb->ifindex;
-            new_pkt_data.len = skb->len > MAX_PACKET_SIZE ? MAX_PACKET_SIZE : skb->len;
-            bpf_skb_load_bytes(skb, 0, new_pkt_data.data, new_pkt_data.len);
-            bpf_map_update_elem(&pkt_data_array, &key, &new_pkt_data, BPF_ANY);
-        }
-        else{
-            // Fill in the packet data
-            pkt_data->ifindex = skb->ifindex;
-            pkt_data->len = skb->len > MAX_PACKET_SIZE ? MAX_PACKET_SIZE : skb->len;
-
-            // Copy the DNS packet data (up to MAX_PACKET_SIZE)
-            bpf_skb_load_bytes(skb, 0, pkt_data->data, pkt_data->len);
-
-            // Store the packet data in the map
-            bpf_map_update_elem(&delayed_packets, &packet_key, pkt_data, BPF_ANY);
+            return TC_ACT_SHOT; // Drop if no space available in per-CPU array
         }
 
-        // Initialize and start the timer directly in the map
+        // Fill in the packet data
+        pkt_data->ifindex = skb->ifindex;
+        pkt_data->len = skb->len > MAX_PACKET_SIZE ? MAX_PACKET_SIZE : skb->len;
+
+        // Copy the DNS packet data (up to MAX_PACKET_SIZE)
+        bpf_skb_load_bytes(skb, 0, pkt_data->data, pkt_data->len);
+
+        // Store the packet data in the map
+        bpf_map_update_elem(&delayed_packets, &packet_key, pkt_data, BPF_ANY);
+
+        // Initialize a new timer in the map
         struct bpf_timer *new_timer = bpf_map_lookup_elem(&packet_timers, &packet_key);
         if (!new_timer) {
             struct bpf_timer timer_value;
